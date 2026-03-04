@@ -1783,84 +1783,25 @@ func (s *ProjectService) RestartProject(ctx context.Context, projectID string, u
 }
 
 func (s *ProjectService) UpdateProject(ctx context.Context, projectID string, name *string, composeContent, envContent *string, user models.User) (*models.Project, error) {
-	var proj models.Project
-	if err := s.db.WithContext(ctx).First(&proj, "id = ?", projectID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("project not found")
-		}
-		return nil, fmt.Errorf("failed to get project: %w", err)
-	}
-
-	// Get projects directory for security validation
-	projectsDirectory, err := fs.GetProjectsDirectory(ctx, s.settingsService.GetStringSetting(ctx, "projectsDirectory", "/app/data/projects"))
+	proj, projectsDirectory, err := s.getProjectForUpdate(ctx, projectID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get projects directory: %w", err)
-	}
-	// Ensure the project's path is under the projects root (repair legacy relative paths)
-	if err := s.ensureProjectPathUnderRoot(ctx, &proj, false); err != nil {
 		return nil, err
 	}
 
-	originalPath := proj.Path
-	originalDirName := proj.DirName
-	committed := false
-	defer func() {
-		if committed || proj.Path == originalPath {
-			return
+	if err := s.withProjectRenameRollback(ctx, &proj, func() error {
+		if err := s.applyProjectRenameIfNeeded(&proj, name, projectsDirectory); err != nil {
+			return err
 		}
-		if err := os.Rename(proj.Path, originalPath); err != nil {
-			slog.WarnContext(ctx, "failed to rollback project directory rename", "from", proj.Path, "to", originalPath, "error", err)
-			return
+		if err := s.persistUpdatedProjectFiles(ctx, &proj, projectsDirectory, composeContent, envContent); err != nil {
+			return err
 		}
-		proj.Path = originalPath
-		proj.DirName = originalDirName
-	}()
-
-	if err := s.applyProjectRenameIfNeeded(&proj, name, projectsDirectory); err != nil {
+		if err := s.db.WithContext(ctx).Save(&proj).Error; err != nil {
+			return fmt.Errorf("failed to update project: %w", err)
+		}
+		return nil
+	}); err != nil {
 		return nil, err
 	}
-
-	switch {
-	case composeContent != nil:
-		// Validate compose content before writing to disk to surface syntax errors early.
-		// compose-go can panic on malformed inputs (e.g. invalid depends_on format), so we
-		// catch both returned errors and panics here.
-		var composeValidateErr error
-		validationProjectName := normalizeComposeProjectName(proj.Name)
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					composeValidateErr = fmt.Errorf("compose file contains invalid syntax: %v", r)
-				}
-			}()
-			cfg := composetypes.ConfigDetails{
-				Version: api.ComposeVersion,
-				ConfigFiles: []composetypes.ConfigFile{
-					{Filename: "compose.yaml", Content: []byte(*composeContent)},
-				},
-			}
-			_, composeValidateErr = loader.LoadWithContext(ctx, cfg, func(opts *loader.Options) {
-				if validationProjectName != "" {
-					opts.SetProjectName(validationProjectName, true)
-				}
-			})
-		}()
-		if composeValidateErr != nil {
-			return nil, fmt.Errorf("invalid compose file: %w", composeValidateErr)
-		}
-		if err := fs.SaveOrUpdateProjectFiles(projectsDirectory, proj.Path, *composeContent, envContent); err != nil {
-			return nil, fmt.Errorf("failed to save project files: %w", err)
-		}
-	case envContent != nil:
-		if err := fs.WriteEnvFile(projectsDirectory, proj.Path, *envContent); err != nil {
-			return nil, err
-		}
-	}
-
-	if err := s.db.WithContext(ctx).Save(&proj).Error; err != nil {
-		return nil, fmt.Errorf("failed to update project: %w", err)
-	}
-	committed = true
 
 	metadata := models.JSON{
 		"action":      "update",
@@ -1879,6 +1820,123 @@ func (s *ProjectService) UpdateProject(ctx context.Context, projectID string, na
 
 	slog.InfoContext(ctx, "project updated", "projectID", proj.ID, "name", proj.Name)
 	return &proj, nil
+}
+
+func (s *ProjectService) getProjectForUpdate(ctx context.Context, projectID string) (models.Project, string, error) {
+	var proj models.Project
+	if err := s.db.WithContext(ctx).First(&proj, "id = ?", projectID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return models.Project{}, "", fmt.Errorf("project not found")
+		}
+		return models.Project{}, "", fmt.Errorf("failed to get project: %w", err)
+	}
+
+	projectsDirectory, err := fs.GetProjectsDirectory(ctx, s.settingsService.GetStringSetting(ctx, "projectsDirectory", "/app/data/projects"))
+	if err != nil {
+		return models.Project{}, "", fmt.Errorf("failed to get projects directory: %w", err)
+	}
+
+	if err := s.ensureProjectPathUnderRoot(ctx, &proj, false); err != nil {
+		return models.Project{}, "", err
+	}
+
+	return proj, projectsDirectory, nil
+}
+
+func (s *ProjectService) withProjectRenameRollback(ctx context.Context, proj *models.Project, run func() error) error {
+	originalPath := proj.Path
+	originalDirName := proj.DirName
+
+	if err := run(); err != nil {
+		if proj.Path != originalPath {
+			if renameErr := os.Rename(proj.Path, originalPath); renameErr != nil {
+				slog.WarnContext(ctx, "failed to rollback project directory rename", "from", proj.Path, "to", originalPath, "error", renameErr)
+				return err
+			}
+			proj.Path = originalPath
+			proj.DirName = originalDirName
+		}
+		return err
+	}
+
+	return nil
+}
+
+func (s *ProjectService) persistUpdatedProjectFiles(ctx context.Context, proj *models.Project, projectsDirectory string, composeContent, envContent *string) error {
+	switch {
+	case composeContent != nil:
+		if err := s.validateComposeContentForUpdate(ctx, proj.Path, proj.Name, *composeContent, envContent); err != nil {
+			return fmt.Errorf("invalid compose file: %w", err)
+		}
+		if err := fs.SaveOrUpdateProjectFiles(projectsDirectory, proj.Path, *composeContent, envContent); err != nil {
+			return fmt.Errorf("failed to save project files: %w", err)
+		}
+	case envContent != nil:
+		if err := fs.WriteEnvFile(projectsDirectory, proj.Path, *envContent); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *ProjectService) validateComposeContentForUpdate(ctx context.Context, projectPath, projectName, composeContent string, envContent *string) (err error) {
+	cleanup, err := prepareComposeValidationEnvFile(ctx, projectPath, envContent)
+	if err != nil {
+		return err
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("compose file contains invalid syntax: %v", recovered)
+		}
+	}()
+
+	validationProjectName := normalizeComposeProjectName(projectName)
+	cfg := composetypes.ConfigDetails{
+		Version:    api.ComposeVersion,
+		WorkingDir: projectPath,
+		ConfigFiles: []composetypes.ConfigFile{
+			{Filename: filepath.Join(projectPath, "compose.yaml"), Content: []byte(composeContent)},
+		},
+	}
+
+	_, err = loader.LoadWithContext(ctx, cfg, func(opts *loader.Options) {
+		if validationProjectName != "" {
+			opts.SetProjectName(validationProjectName, true)
+		}
+	})
+
+	return err
+}
+
+func prepareComposeValidationEnvFile(ctx context.Context, projectPath string, envContent *string) (func(), error) {
+	validationEnvPath := filepath.Join(projectPath, ".env")
+	if _, err := os.Stat(validationEnvPath); err == nil {
+		return nil, nil
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("failed to stat project env file: %w", err)
+	}
+
+	validationEnvContent := ""
+	if envContent != nil {
+		validationEnvContent = *envContent
+	}
+
+	if err := fs.WriteFileWithPerm(validationEnvPath, validationEnvContent, common.FilePerm); err != nil {
+		return nil, fmt.Errorf("failed to prepare env file for compose validation: %w", err)
+	}
+
+	cleanup := func() {
+		if err := os.Remove(validationEnvPath); err != nil && !os.IsNotExist(err) {
+			slog.WarnContext(ctx, "failed to remove temporary env file after compose validation", "path", validationEnvPath, "error", err)
+		}
+	}
+
+	return cleanup, nil
 }
 
 func (s *ProjectService) applyProjectRenameIfNeeded(proj *models.Project, name *string, projectsDirectory string) error {
