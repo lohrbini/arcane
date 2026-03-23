@@ -70,10 +70,10 @@ jobs:
           echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v7
+        uses: goreleaser/goreleaser-action@ec59f474b9834571250b370d4735c50f8e2d1e29 #v7.0.0
         with:
           distribution: goreleaser-pro
-          version: "~> v2"
+          version: "~> 2"
           args: release --clean --skip=sign,announce,validate,nfpm,homebrew
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
