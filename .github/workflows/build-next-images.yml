@@ -1,9 +1,6 @@
 name: Build Next Images
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 concurrency:
