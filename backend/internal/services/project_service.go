@@ -675,7 +675,14 @@ func (s *ProjectService) GetProjectDetails(ctx context.Context, projectID string
 func (s *ProjectService) enrichWithIncludeFiles(ctx context.Context, projectPath string, resp *project.Details) {
 	composeFile, detectErr := projects.DetectComposeFile(projectPath)
 	if detectErr == nil {
-		includes, parseErr := projects.ParseIncludes(composeFile)
+		// Load environment variables so that include paths with ${VAR} references are expanded
+		projectsDirSetting := s.settingsService.GetStringSetting(ctx, "projectsDirectory", "/app/data/projects")
+		projectsDirectory, _ := projects.GetProjectsDirectory(ctx, strings.TrimSpace(projectsDirSetting))
+		autoInjectEnv := s.settingsService.GetBoolSetting(ctx, "autoInjectEnv", false)
+		envLoader := projects.NewEnvLoader(projectsDirectory, filepath.Dir(composeFile), autoInjectEnv)
+		envMap, _, _ := envLoader.LoadEnvironment(ctx)
+
+		includes, parseErr := projects.ParseIncludes(composeFile, envMap)
 		if parseErr == nil {
 			var includeFiles []project.IncludeFile
 			for _, inc := range includes {
