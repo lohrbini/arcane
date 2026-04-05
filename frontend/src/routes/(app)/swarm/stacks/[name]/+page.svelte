@@ -230,7 +230,7 @@
 							<Card.Root class="flex min-h-0 min-w-0 flex-col overflow-hidden">
 								<Card.Header icon={CodeIcon} class="flex-shrink-0">
 									<Card.Title>
-										<h2>{m.common_docker_compose()}</h2>
+										<h2>compose.yaml</h2>
 									</Card.Title>
 								</Card.Header>
 								<Card.Content class="relative z-0 flex min-h-0 flex-1 flex-col overflow-visible p-0">
@@ -249,7 +249,7 @@
 							<Card.Root class="flex min-h-0 min-w-0 flex-col overflow-hidden">
 								<Card.Header icon={FileTextIcon} class="flex-shrink-0">
 									<Card.Title>
-										<h2>{m.environment_file()}</h2>
+										<h2>.env</h2>
 									</Card.Title>
 								</Card.Header>
 								<Card.Content class="relative z-0 flex min-h-0 flex-1 flex-col overflow-visible p-0">

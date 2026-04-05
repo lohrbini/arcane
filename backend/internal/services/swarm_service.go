@@ -1290,10 +1290,6 @@ func (s *SwarmService) GetStack(ctx context.Context, environmentID, stackName st
 }
 
 func (s *SwarmService) GetStackSource(ctx context.Context, environmentID, stackName string) (*swarmtypes.StackSource, error) {
-	if err := s.ensureSwarmManagerInternal(ctx); err != nil {
-		return nil, err
-	}
-
 	stackName = strings.TrimSpace(stackName)
 	if stackName == "" {
 		return nil, errors.New("stack name is required")
@@ -1324,6 +1320,26 @@ func (s *SwarmService) GetStackSource(ctx context.Context, environmentID, stackN
 		Name:           stackName,
 		ComposeContent: string(composeContent),
 		EnvContent:     envContent,
+	}, nil
+}
+
+func (s *SwarmService) UpdateStackSource(ctx context.Context, environmentID, stackName string, req swarmtypes.StackSourceUpdateRequest) (*swarmtypes.StackSource, error) {
+	stackName = strings.TrimSpace(stackName)
+	if stackName == "" {
+		return nil, errors.New("stack name is required")
+	}
+	if strings.TrimSpace(req.ComposeContent) == "" {
+		return nil, errors.New("stack compose source is required")
+	}
+
+	if err := s.upsertStackSourceInternal(ctx, environmentID, stackName, req.ComposeContent, req.EnvContent); err != nil {
+		return nil, err
+	}
+
+	return &swarmtypes.StackSource{
+		Name:           stackName,
+		ComposeContent: req.ComposeContent,
+		EnvContent:     req.EnvContent,
 	}, nil
 }
 
