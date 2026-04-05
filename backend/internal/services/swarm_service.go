@@ -1440,16 +1440,43 @@ func (s *SwarmService) RemoveStack(ctx context.Context, environmentID, stackName
 		return err
 	}
 	if len(services) == 0 {
-		if _, err := s.getPersistedStackSourceSummaryInternal(ctx, environmentID, stackName); err != nil {
-			if cerrdefs.IsNotFound(err) {
-				return cerrdefs.ErrNotFound
-			}
-			return err
-		}
-
-		return s.deleteStackSourceInternal(ctx, environmentID, stackName)
+		return s.removeSourceOnlyStackInternal(ctx, environmentID, stackName)
 	}
 
+	if err := s.removeStackServicesInternal(ctx, dockerClient, services); err != nil {
+		return err
+	}
+
+	stackLabel := fmt.Sprintf("%s=%s", swarmtypes.StackNamespaceLabel, stackName)
+	if err := s.removeStackConfigsInternal(ctx, dockerClient, stackLabel); err != nil {
+		return err
+	}
+	if err := s.removeStackSecretsInternal(ctx, dockerClient, stackLabel); err != nil {
+		return err
+	}
+	if err := s.removeStackNetworksInternal(ctx, dockerClient, stackLabel); err != nil {
+		return err
+	}
+
+	if err := s.deleteStackSourceInternal(ctx, environmentID, stackName); err != nil {
+		slog.WarnContext(ctx, "failed to remove persisted swarm stack source", "environmentID", normalizeSwarmEnvironmentIDInternal(environmentID), "stackName", stackName, "error", err)
+	}
+
+	return nil
+}
+
+func (s *SwarmService) removeSourceOnlyStackInternal(ctx context.Context, environmentID, stackName string) error {
+	if _, err := s.getPersistedStackSourceSummaryInternal(ctx, environmentID, stackName); err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return cerrdefs.ErrNotFound
+		}
+		return err
+	}
+
+	return s.deleteStackSourceInternal(ctx, environmentID, stackName)
+}
+
+func (s *SwarmService) removeStackServicesInternal(ctx context.Context, dockerClient *dockerclient.Client, services []swarm.Service) error {
 	serviceIDs := make(map[string]struct{}, len(services))
 	for _, service := range services {
 		serviceIDs[service.ID] = struct{}{}
@@ -1462,8 +1489,10 @@ func (s *SwarmService) RemoveStack(ctx context.Context, environmentID, stackName
 		return err
 	}
 
-	stackLabel := fmt.Sprintf("%s=%s", swarmtypes.StackNamespaceLabel, stackName)
+	return nil
+}
 
+func (s *SwarmService) removeStackConfigsInternal(ctx context.Context, dockerClient *dockerclient.Client, stackLabel string) error {
 	configFilter := make(dockerclient.Filters).Add("label", stackLabel)
 	configsResult, err := dockerClient.ConfigList(ctx, dockerclient.ConfigListOptions{Filters: configFilter})
 	if err != nil {
@@ -1475,6 +1504,10 @@ func (s *SwarmService) RemoveStack(ctx context.Context, environmentID, stackName
 		}
 	}
 
+	return nil
+}
+
+func (s *SwarmService) removeStackSecretsInternal(ctx context.Context, dockerClient *dockerclient.Client, stackLabel string) error {
 	secretFilter := make(dockerclient.Filters).Add("label", stackLabel)
 	secretsResult, err := dockerClient.SecretList(ctx, dockerclient.SecretListOptions{Filters: secretFilter})
 	if err != nil {
@@ -1486,6 +1519,10 @@ func (s *SwarmService) RemoveStack(ctx context.Context, environmentID, stackName
 		}
 	}
 
+	return nil
+}
+
+func (s *SwarmService) removeStackNetworksInternal(ctx context.Context, dockerClient *dockerclient.Client, stackLabel string) error {
 	networkFilter := make(dockerclient.Filters).Add("label", stackLabel)
 	networksResult, err := dockerClient.NetworkList(ctx, dockerclient.NetworkListOptions{Filters: networkFilter})
 	if err != nil {
@@ -1498,10 +1535,6 @@ func (s *SwarmService) RemoveStack(ctx context.Context, environmentID, stackName
 		if _, err := dockerClient.NetworkRemove(ctx, network.ID, dockerclient.NetworkRemoveOptions{}); err != nil && !cerrdefs.IsNotFound(err) {
 			return fmt.Errorf("failed to remove stack network %s: %w", network.Name, err)
 		}
-	}
-
-	if err := s.deleteStackSourceInternal(ctx, environmentID, stackName); err != nil {
-		slog.WarnContext(ctx, "failed to remove persisted swarm stack source", "environmentID", normalizeSwarmEnvironmentIDInternal(environmentID), "stackName", stackName, "error", err)
 	}
 
 	return nil
