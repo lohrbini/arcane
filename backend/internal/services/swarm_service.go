@@ -2091,8 +2091,7 @@ func (s *SwarmService) deleteStackSourceInternal(ctx context.Context, environmen
 	environmentDir := filepath.Dir(stackSourceDir)
 	if environmentDir != rootDir {
 		if err := os.Remove(environmentDir); err != nil && !errors.Is(err, os.ErrNotExist) {
-			var errno syscall.Errno
-			if errors.As(err, &errno) && (errno == syscall.ENOTEMPTY || errno == syscall.EACCES) {
+			if errno, ok := errors.AsType[syscall.Errno](err); ok && (errno == syscall.ENOTEMPTY || errno == syscall.EACCES) {
 				slog.DebugContext(ctx, "swarm stack source environment directory cleanup skipped", "dir", environmentDir, "error", err)
 				return nil
 			}
