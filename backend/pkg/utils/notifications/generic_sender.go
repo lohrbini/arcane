@@ -42,58 +42,50 @@ func BuildGenericURL(config models.GenericConfig) (string, error) {
 
 	// Build generic service URL
 	// Format: generic://host[:port]/path?params
-	// Shoutrrr's generic service uses HTTP or HTTPS based on the DisableTLS setting
-	scheme := "generic"
+	// Shoutrrr's generic service uses HTTP or HTTPS based on the DisableTLS setting.
 
-	// Start with the base URL.
-	// Preserve any query parameters from the original webhook URL by encoding
-	// the ? as %3F so it stays in the path component. Shoutrrr decodes the path
-	// when constructing the outbound HTTP request, recovering the original query
-	// string for the upstream service.
-	rawPath := webhookURL.Path
-	decodedPath := webhookURL.Path
-	if webhookURL.RawQuery != "" {
-		rawPath = webhookURL.Path + "%3F" + webhookURL.RawQuery
-		decodedPath = webhookURL.Path + "?" + webhookURL.RawQuery
-	}
-	shoutrrrURL := &url.URL{
-		Scheme:  scheme,
-		Host:    webhookURL.Host,
-		RawPath: rawPath,
-		Path:    decodedPath,
-	}
+	// Start from the user's existing query parameters. Shoutrrr's generic
+	// service preserves any query keys it does not recognise, so provider
+	// tokens embedded in the webhook URL (e.g. PushPlus's `?token=...`) flow
+	// straight through to the outbound HTTP request untouched.
+	//
+	// For Shoutrrr config keys (template, contenttype, method, titlekey,
+	// messagekey, disabletls) we only fill in defaults / configured values
+	// when the user has not already set the same key inline in the URL.
+	// That way an explicit `?template=custom` or `?disabletls=yes` from the
+	// user is always respected and never silently overwritten by the
+	// provider settings or the URL-scheme-derived TLS flag.
+	query := webhookURL.Query()
 
-	// Build query parameters
-	query := url.Values{}
-
-	// Set template to JSON (default for generic webhooks)
-	query.Set("template", "json")
-
-	// Set content type if provided
-	if config.ContentType != "" {
-		query.Set("contenttype", config.ContentType)
+	setDefault := func(key, value string) {
+		if value == "" {
+			return
+		}
+		if query.Get(key) != "" {
+			return
+		}
+		query.Set(key, value)
 	}
 
-	// Set HTTP method if provided
-	if config.Method != "" {
-		query.Set("method", config.Method)
-	}
+	// Default to the JSON template — Shoutrrr's JSON template marshals the
+	// notification params as a flat JSON object at the root level, which is
+	// the format most providers (PushPlus, custom APIs, Home Assistant, etc.)
+	// expect.
+	setDefault("template", "json")
+	setDefault("contenttype", config.ContentType)
+	setDefault("method", config.Method)
+	setDefault("titlekey", config.TitleKey)
+	setDefault("messagekey", config.MessageKey)
 
-	// Set title and message keys if provided
-	if config.TitleKey != "" {
-		query.Set("titlekey", config.TitleKey)
-	}
-	if config.MessageKey != "" {
-		query.Set("messagekey", config.MessageKey)
-	}
-
-	// Determine TLS setting from the webhook URL scheme (http/https)
-	// If scheme is missing, DisableTLS is only used to infer the default scheme above.
+	// Determine TLS setting from the webhook URL scheme (http/https) when the
+	// user has not already passed `disabletls` explicitly. If the scheme is
+	// missing here we treat it as a hard error because Shoutrrr needs an
+	// explicit transport.
 	switch strings.ToLower(webhookURL.Scheme) {
 	case "http":
-		query.Set("disabletls", "yes")
+		setDefault("disabletls", "yes")
 	case "https":
-		query.Set("disabletls", "no")
+		setDefault("disabletls", "no")
 	default:
 		return "", fmt.Errorf("invalid webhook URL scheme: %s", webhookURL.Scheme)
 	}
@@ -106,7 +98,12 @@ func BuildGenericURL(config models.GenericConfig) (string, error) {
 		}
 	}
 
-	shoutrrrURL.RawQuery = query.Encode()
+	shoutrrrURL := &url.URL{
+		Scheme:   "generic",
+		Host:     webhookURL.Host,
+		Path:     webhookURL.Path,
+		RawQuery: query.Encode(),
+	}
 
 	return shoutrrrURL.String(), nil
 }
