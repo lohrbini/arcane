@@ -48,6 +48,9 @@ jobs:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
 
+      - name: Install envsubst
+        run: sudo apt-get update && sudo apt-get install -y gettext-base
+
       - name: Install cosign
         uses: sigstore/cosign-installer@v4.1.1
 

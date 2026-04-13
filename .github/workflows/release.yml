@@ -65,6 +65,9 @@ jobs:
             backend/go.sum
             cli/go.sum
 
+      - name: Install envsubst
+        run: sudo apt-get update && sudo apt-get install -y gettext-base
+
       - name: Install cosign
         uses: sigstore/cosign-installer@v4.1.1
 
