@@ -157,26 +157,28 @@ binary_signs:
       - arcane
       - arcane-agent
       - arcane-cli
-    signature: "${artifact}.sigstore.json"
+    signature: "${artifact}.sig"
+    stdin: "{{ .Env.COSIGN_PASSWORD }}"
     args:
       - sign-blob
-      - "--identity-token={{ index .Env \"SIGSTORE_ID_TOKEN\" }}"
-      - "--bundle=${signature}"
+      - --key=env://COSIGN_PRIVATE_KEY
+      - --output-signature=${signature}
       - "${artifact}"
-      - "--yes"
+      - --yes
     output: true
 
 signs:
   - id: cosign-checksums
     cmd: cosign
     artifacts: checksum
-    signature: "${artifact}.sigstore.json"
+    signature: "${artifact}.sig"
+    stdin: "{{ .Env.COSIGN_PASSWORD }}"
     args:
       - sign-blob
-      - "--identity-token={{ index .Env \"SIGSTORE_ID_TOKEN\" }}"
-      - "--bundle=${signature}"
+      - --key=env://COSIGN_PRIVATE_KEY
+      - --output-signature=${signature}
       - "${artifact}"
-      - "--yes"
+      - --yes
     output: true
 
 nfpms:
@@ -339,16 +341,18 @@ dockers_v2:
 
 docker_signs:
   - id: cosign-next-images
+    cmd: cosign
     ids:
       - arcane-next
       - arcane-agent-next
       - arcane-next-distroless
       - arcane-agent-next-distroless
+    stdin: "{{ .Env.COSIGN_PASSWORD }}"
     args:
       - sign
-      - "--identity-token={{ index .Env \"SIGSTORE_ID_TOKEN\" }}"
+      - --key=env://COSIGN_PRIVATE_KEY
       - "${artifact}@${digest}"
-      - "--yes"
+      - --yes
     output: true
 
 blobs:
