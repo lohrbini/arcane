@@ -65,6 +65,9 @@ jobs:
             backend/go.sum
             cli/go.sum
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4.1.1
+
       - name: Manager image metadata
         id: manager-meta
         uses: docker/metadata-action@v6
@@ -103,6 +106,10 @@ jobs:
             REVISION=${{ github.sha }}
           sbom: true
           provenance: true
+
+      - name: Sign manager image
+        run: cosign sign --yes "${MANAGER_IMAGE_NAME}@${{
+          steps.manager-build.outputs.digest }}"
 
       - name: Agent image metadata
         id: agent-meta
@@ -143,6 +150,10 @@ jobs:
             REVISION=${{ github.sha }}
           sbom: true
           provenance: true
+
+      - name: Sign agent image
+        run: cosign sign --yes "${AGENT_IMAGE_NAME}@${{ steps.agent-build.outputs.digest
+          }}"
 
       - name: Container image attestation (manager)
         uses: actions/attest-build-provenance@v4

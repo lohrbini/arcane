@@ -150,6 +150,33 @@ upx:
     lzma: true
     brute: true
 
+binary_signs:
+  - id: cosign-binaries
+    cmd: cosign
+    ids:
+      - arcane
+      - arcane-agent
+      - arcane-cli
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
+    output: true
+
+signs:
+  - id: cosign-checksums
+    cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
+    output: true
+
 nfpms:
   - id: arcane-cli
     package_name: arcane-cli
@@ -307,6 +334,19 @@ dockers_v2:
       'com.getarcaneapp.arcane.agent': 'true'
     disable: '{{ if not (index .Env "BUILD_NEXT") }}true{{ end }}'
     sbom: true
+
+docker_signs:
+  - id: cosign-next-images
+    ids:
+      - arcane-next
+      - arcane-agent-next
+      - arcane-next-distroless
+      - arcane-agent-next-distroless
+    args:
+      - sign
+      - "${artifact}@${digest}"
+      - "--yes"
+    output: true
 
 blobs:
   - provider: s3

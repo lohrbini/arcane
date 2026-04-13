@@ -49,6 +49,9 @@ jobs:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4.1.1
+
       - name: Set up Depot CLI
         uses: depot/setup-action@v1
 
@@ -79,7 +82,7 @@ jobs:
         with:
           distribution: goreleaser-pro
           version: '~> 2'
-          args: release --clean --skip=sign,announce,validate,nfpm,homebrew
+          args: release --clean --skip=announce,validate,nfpm,homebrew
         env:
           GITHUB_TOKEN: ${{ secrets.ARCANE_BOT_TOKEN }}
           BUILD_NEXT: 'true'
@@ -131,6 +134,9 @@ jobs:
           sbom: true
           provenance: true
 
+      - name: Sign manager image
+        run: cosign sign --yes "${MANAGER_IMAGE_NAME}@${{ steps.manager-build.outputs.digest }}"
+
       - name: Agent image metadata
         id: agent-meta
         uses: docker/metadata-action@v6
@@ -168,3 +174,6 @@ jobs:
             REVISION=${{ github.sha }}
           sbom: true
           provenance: true
+
+      - name: Sign agent image
+        run: cosign sign --yes "${AGENT_IMAGE_NAME}@${{ steps.agent-build.outputs.digest }}"
