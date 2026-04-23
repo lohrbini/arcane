@@ -42,7 +42,8 @@
 		sv: 'Svenska',
 		uk: 'Українська',
 		vi: 'Tiếng Việt',
-		'zh-CN': '中文'
+		'zh-CN': '中文',
+		'zh-TW': '繁體中文'
 	};
 
 	const updateLocaleMutation = createMutation(() => ({
