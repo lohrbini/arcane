@@ -39,9 +39,6 @@ var loggerSkipPatterns = []string{
 	"GET /api/fonts/serif",
 	"GET /api/health",
 	"HEAD /api/health",
-	"POST /api/environments/*/projects/*/up",
-	"POST /api/environments/*/projects/*/pull",
-	"POST /api/environments/*/projects/*/build",
 }
 
 func shouldLogRequest(c *gin.Context) bool {
@@ -63,6 +60,20 @@ func shouldLogRequest(c *gin.Context) bool {
 		}
 	}
 	return true
+}
+
+func requestLoggerMiddlewareInternal() gin.HandlerFunc {
+	loggerMiddleware := sloggin.NewWithConfig(slog.Default(), sloggin.Config{
+		Filters: []sloggin.Filter{shouldLogRequest},
+	})
+
+	return func(c *gin.Context) {
+		if edge.IsInternalTunnelRequest(c.Request.Context()) {
+			c.Next()
+			return
+		}
+		loggerMiddleware(c)
+	}
 }
 
 func createAuthValidator(appServices *Services) middleware.AuthValidator {
@@ -98,7 +109,7 @@ func createAuthValidator(appServices *Services) middleware.AuthValidator {
 	}
 }
 
-func setupRouter(ctx context.Context, cfg *config.Config, appServices *Services) (*gin.Engine, *gin.Engine, *edge.TunnelServer) {
+func setupRouter(ctx context.Context, cfg *config.Config, appServices *Services) (*gin.Engine, *edge.TunnelServer) {
 	if cfg.Environment == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	} else {
@@ -107,22 +118,15 @@ func setupRouter(ctx context.Context, cfg *config.Config, appServices *Services)
 	router := gin.New()
 	router.Use(gin.Recovery())
 
-	router.Use(sloggin.NewWithConfig(slog.Default(), sloggin.Config{
-		Filters: []sloggin.Filter{shouldLogRequest},
-	}))
-
-	internalRouter := gin.New()
-	internalRouter.Use(gin.Recovery())
+	router.Use(requestLoggerMiddlewareInternal()) //nolint:contextcheck
 
 	authMiddleware := middleware.NewAuthMiddleware(appServices.Auth, cfg).
 		WithApiKeyValidator(appServices.ApiKey).
 		WithEnvironmentAccessTokenResolver(appServices.Environment)
 	corsMiddleware := middleware.NewCORSMiddleware(cfg).Add()
 	router.Use(corsMiddleware)
-	internalRouter.Use(corsMiddleware)
 
 	apiGroup := router.Group("/api")
-	internalAPIGroup := internalRouter.Group("/api")
 	tunnelRegistry := edge.NewTunnelRegistry()
 	edge.SetDefaultRegistry(tunnelRegistry)
 	envResolver := func(ctx context.Context, id string) (string, *string, bool, error) {
@@ -134,8 +138,7 @@ func setupRouter(ctx context.Context, cfg *config.Config, appServices *Services)
 	}
 
 	// Register public webhook trigger endpoint before auth middleware (token in URL is the sole auth)
-	handlers.RegisterWebhookTrigger(apiGroup, appServices.Webhook)         //nolint:contextcheck
-	handlers.RegisterWebhookTrigger(internalAPIGroup, appServices.Webhook) //nolint:contextcheck
+	handlers.RegisterWebhookTrigger(apiGroup, appServices.Webhook) //nolint:contextcheck
 
 	envProxyMiddleware := middleware.NewEnvProxyMiddlewareWithParam(
 		types.LOCAL_DOCKER_ENVIRONMENT_ID,
@@ -144,7 +147,6 @@ func setupRouter(ctx context.Context, cfg *config.Config, appServices *Services)
 		createAuthValidator(appServices),
 	)
 	apiGroup.Use(envProxyMiddleware)
-	internalAPIGroup.Use(envProxyMiddleware)
 
 	humaServices := &huma.Services{
 		User:              appServices.User,
@@ -187,19 +189,15 @@ func setupRouter(ctx context.Context, cfg *config.Config, appServices *Services)
 	}
 
 	_ = huma.SetupAPI(router, apiGroup, cfg, humaServices)
-	_ = huma.SetupAPI(internalRouter, internalAPIGroup, cfg, humaServices)
 
 	for _, register := range registerBuildableRoutes {
 		register(apiGroup, appServices)
-		register(internalAPIGroup, appServices)
 	}
 
-	api.RegisterDiagnosticsRoutes(apiGroup, authMiddleware, api.DefaultWebSocketMetrics())         //nolint:contextcheck
-	api.RegisterDiagnosticsRoutes(internalAPIGroup, authMiddleware, api.DefaultWebSocketMetrics()) //nolint:contextcheck
+	api.RegisterDiagnosticsRoutes(apiGroup, authMiddleware, api.DefaultWebSocketMetrics()) //nolint:contextcheck
 
 	// Remaining Gin handlers (WebSocket/streaming)
-	api.NewWebSocketHandler(apiGroup, appServices.Project, appServices.Container, appServices.Swarm, appServices.System, authMiddleware, cfg)         //nolint:contextcheck
-	api.NewWebSocketHandler(internalAPIGroup, appServices.Project, appServices.Container, appServices.Swarm, appServices.System, authMiddleware, cfg) //nolint:contextcheck
+	api.NewWebSocketHandler(apiGroup, appServices.Project, appServices.Container, appServices.Swarm, appServices.System, authMiddleware, cfg) //nolint:contextcheck
 
 	// Register edge tunnel endpoint for manager to accept agent connections
 	// This is only registered when NOT in agent mode (i.e., running as manager)
@@ -211,7 +209,6 @@ func setupRouter(ctx context.Context, cfg *config.Config, appServices *Services)
 	if cfg.Environment != "production" {
 		for _, registerFunc := range registerPlaywrightRoutes {
 			registerFunc(apiGroup, appServices)
-			registerFunc(internalAPIGroup, appServices)
 		}
 	}
 
@@ -219,5 +216,5 @@ func setupRouter(ctx context.Context, cfg *config.Config, appServices *Services)
 		_, _ = gin.DefaultErrorWriter.Write([]byte("Failed to register frontend: " + err.Error() + "\n"))
 	}
 
-	return router, internalRouter, tunnelServer
+	return router, tunnelServer
 }
