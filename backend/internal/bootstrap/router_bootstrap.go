@@ -206,7 +206,6 @@ func setupRouter(ctx context.Context, cfg *config.Config, appServices *Services)
 	var tunnelServer *edge.TunnelServer
 	if !cfg.AgentMode {
 		tunnelServer = registerEdgeTunnelRoutes(ctx, cfg, apiGroup, appServices)
-		registerEdgeTunnelRoutes(ctx, cfg, internalAPIGroup, appServices)
 	}
 
 	if cfg.Environment != "production" {
