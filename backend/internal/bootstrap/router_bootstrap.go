@@ -39,6 +39,9 @@ var loggerSkipPatterns = []string{
 	"GET /api/fonts/serif",
 	"GET /api/health",
 	"HEAD /api/health",
+	"POST /api/environments/*/projects/*/up",
+	"POST /api/environments/*/projects/*/pull",
+	"POST /api/environments/*/projects/*/build",
 }
 
 func shouldLogRequest(c *gin.Context) bool {
@@ -95,7 +98,7 @@ func createAuthValidator(appServices *Services) middleware.AuthValidator {
 	}
 }
 
-func setupRouter(ctx context.Context, cfg *config.Config, appServices *Services) (*gin.Engine, *edge.TunnelServer) {
+func setupRouter(ctx context.Context, cfg *config.Config, appServices *Services) (*gin.Engine, *gin.Engine, *edge.TunnelServer) {
 	if cfg.Environment == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	} else {
@@ -108,13 +111,18 @@ func setupRouter(ctx context.Context, cfg *config.Config, appServices *Services)
 		Filters: []sloggin.Filter{shouldLogRequest},
 	}))
 
+	internalRouter := gin.New()
+	internalRouter.Use(gin.Recovery())
+
 	authMiddleware := middleware.NewAuthMiddleware(appServices.Auth, cfg).
 		WithApiKeyValidator(appServices.ApiKey).
 		WithEnvironmentAccessTokenResolver(appServices.Environment)
 	corsMiddleware := middleware.NewCORSMiddleware(cfg).Add()
 	router.Use(corsMiddleware)
+	internalRouter.Use(corsMiddleware)
 
 	apiGroup := router.Group("/api")
+	internalAPIGroup := internalRouter.Group("/api")
 	tunnelRegistry := edge.NewTunnelRegistry()
 	edge.SetDefaultRegistry(tunnelRegistry)
 	envResolver := func(ctx context.Context, id string) (string, *string, bool, error) {
@@ -126,14 +134,17 @@ func setupRouter(ctx context.Context, cfg *config.Config, appServices *Services)
 	}
 
 	// Register public webhook trigger endpoint before auth middleware (token in URL is the sole auth)
-	handlers.RegisterWebhookTrigger(apiGroup, appServices.Webhook) //nolint:contextcheck
+	handlers.RegisterWebhookTrigger(apiGroup, appServices.Webhook)         //nolint:contextcheck
+	handlers.RegisterWebhookTrigger(internalAPIGroup, appServices.Webhook) //nolint:contextcheck
 
-	apiGroup.Use(middleware.NewEnvProxyMiddlewareWithParam(
+	envProxyMiddleware := middleware.NewEnvProxyMiddlewareWithParam(
 		types.LOCAL_DOCKER_ENVIRONMENT_ID,
 		"id",
 		envResolver,
 		createAuthValidator(appServices),
-	))
+	)
+	apiGroup.Use(envProxyMiddleware)
+	internalAPIGroup.Use(envProxyMiddleware)
 
 	humaServices := &huma.Services{
 		User:              appServices.User,
@@ -176,26 +187,32 @@ func setupRouter(ctx context.Context, cfg *config.Config, appServices *Services)
 	}
 
 	_ = huma.SetupAPI(router, apiGroup, cfg, humaServices)
+	_ = huma.SetupAPI(internalRouter, internalAPIGroup, cfg, humaServices)
 
 	for _, register := range registerBuildableRoutes {
 		register(apiGroup, appServices)
+		register(internalAPIGroup, appServices)
 	}
 
-	api.RegisterDiagnosticsRoutes(apiGroup, authMiddleware, api.DefaultWebSocketMetrics()) //nolint:contextcheck
+	api.RegisterDiagnosticsRoutes(apiGroup, authMiddleware, api.DefaultWebSocketMetrics())         //nolint:contextcheck
+	api.RegisterDiagnosticsRoutes(internalAPIGroup, authMiddleware, api.DefaultWebSocketMetrics()) //nolint:contextcheck
 
 	// Remaining Gin handlers (WebSocket/streaming)
-	api.NewWebSocketHandler(apiGroup, appServices.Project, appServices.Container, appServices.Swarm, appServices.System, authMiddleware, cfg) //nolint:contextcheck
+	api.NewWebSocketHandler(apiGroup, appServices.Project, appServices.Container, appServices.Swarm, appServices.System, authMiddleware, cfg)         //nolint:contextcheck
+	api.NewWebSocketHandler(internalAPIGroup, appServices.Project, appServices.Container, appServices.Swarm, appServices.System, authMiddleware, cfg) //nolint:contextcheck
 
 	// Register edge tunnel endpoint for manager to accept agent connections
 	// This is only registered when NOT in agent mode (i.e., running as manager)
 	var tunnelServer *edge.TunnelServer
 	if !cfg.AgentMode {
 		tunnelServer = registerEdgeTunnelRoutes(ctx, cfg, apiGroup, appServices)
+		registerEdgeTunnelRoutes(ctx, cfg, internalAPIGroup, appServices)
 	}
 
 	if cfg.Environment != "production" {
 		for _, registerFunc := range registerPlaywrightRoutes {
 			registerFunc(apiGroup, appServices)
+			registerFunc(internalAPIGroup, appServices)
 		}
 	}
 
@@ -203,5 +220,5 @@ func setupRouter(ctx context.Context, cfg *config.Config, appServices *Services)
 		_, _ = gin.DefaultErrorWriter.Write([]byte("Failed to register frontend: " + err.Error() + "\n"))
 	}
 
-	return router, tunnelServer
+	return router, internalRouter, tunnelServer
 }

@@ -78,9 +78,9 @@ func Bootstrap(ctx context.Context) error {
 	appServices.JobSchedule.SetScheduler(scheduler)
 	registerJobs(appCtx, scheduler, appServices, cfg)
 
-	router, tunnelServer := setupRouter(appCtx, cfg, appServices)
+	router, internalRouter, tunnelServer := setupRouter(appCtx, cfg, appServices)
 
-	startEdgeTunnelClientIfConfigured(appCtx, cfg, router)
+	startEdgeTunnelClientIfConfigured(appCtx, cfg, internalRouter)
 
 	err = runServices(appCtx, cfg, router, tunnelServer, scheduler)
 	if err != nil {
