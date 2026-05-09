@@ -13,12 +13,10 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY frontend/package.json ./frontend/package.json
 
 RUN --mount=type=cache,id=arcane-pnpm-v2,target=/pnpm/store,sharing=locked \
-    pnpm fetch
+    pnpm fetch && \
+    pnpm install -r --offline --frozen-lockfile
 
 COPY frontend ./frontend
-
-RUN --mount=type=cache,id=arcane-pnpm-v2,target=/pnpm/store,sharing=locked \
-    pnpm install -r --offline --frozen-lockfile
 
 ENV BUILD_PATH=dist
 ENV NODE_OPTIONS="--max-old-space-size=4096"
