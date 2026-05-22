@@ -18,7 +18,7 @@ require (
 	github.com/danielgtaylor/huma/v2 v2.38.0
 	github.com/depot/depot-go v0.5.2
 	github.com/docker/cli v29.5.2+incompatible
-	github.com/docker/compose/v5 v5.1.3
+	github.com/docker/compose/v5 v5.1.4
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/getarcaneapp/arcane/cli v1.19.1
 	github.com/getarcaneapp/arcane/types v1.19.1
